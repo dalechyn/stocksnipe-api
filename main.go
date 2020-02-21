@@ -1,4 +1,4 @@
-package StockSnipe_API
+package main
 
 import (
 	"context"
@@ -8,7 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"time"
+
+	"github.com/joho/godotenv"
 )
+
+func init() {
+	if err := godotenv.Load(); err != nil {
+        log.Print("No .env file found")
+		return
+    }
+}
 
 func main() {
 	var wait time.Duration
@@ -18,12 +27,12 @@ func main() {
 	// Add your routes as needed
 
 	srv := &http.Server{
-		Addr:         "0.0.0.0:8080",
+		Addr: ":8000",
 		// Good practice to set timeouts to avoid Slowloris attacks.
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
 		IdleTimeout:  time.Second * 60,
-		Handler: r, // Pass our instance of gorilla/mux in.
+		Handler: Router(), // Pass our instance of gorilla/mux in.
 	}
 
 	// Run our server in a goroutine so that it doesn't block.

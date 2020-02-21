@@ -1,2 +1,8 @@
 # env files
 .env
+
+# .idea
+.idea
+
+# debug app
+stocksnipe_api
