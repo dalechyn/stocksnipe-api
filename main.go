@@ -3,29 +3,38 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/joho/godotenv"
+	log "github.com/sirupsen/logrus"
 )
 
+var config struct {
+	gracefulExitWait time.Duration
+	debug bool
+}
+
 func init() {
+	flag.DurationVar(&config.gracefulExitWait, "graceful-timeout", time.Second * 15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
+	flag.BoolVar(&config.debug, "debug", false, "debug")
+	flag.Parse()
+
 	if err := godotenv.Load(); err != nil {
         log.Print("No .env file found")
 		return
     }
+	if config.debug {
+		// The TextFormatter is default, you don't actually have to do this.
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.SetFormatter(&log.JSONFormatter{})
+	}
 }
 
 func main() {
-	var wait time.Duration
-	flag.DurationVar(&wait, "graceful-timeout", time.Second * 15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
-	flag.Parse()
-
-	// Add your routes as needed
-
 	srv := &http.Server{
 		Addr: ":8000",
 		// Good practice to set timeouts to avoid Slowloris attacks.
@@ -42,6 +51,10 @@ func main() {
 		}
 	}()
 
+	log.WithFields(log.Fields{
+		"address": srv.Addr,
+	}).Info("Server successfully started")
+
 	c := make(chan os.Signal, 1)
 	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)
 	// SIGKILL, SIGQUIT or SIGTERM (Ctrl+/) will not be caught.
@@ -51,7 +64,7 @@ func main() {
 	<-c
 
 	// Create a deadline to wait for.
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	ctx, cancel := context.WithTimeout(context.Background(), config.gracefulExitWait)
 	defer cancel()
 	// Doesn't block if no connections, but will otherwise wait
 	// until the timeout deadline.
@@ -59,6 +72,6 @@ func main() {
 	// Optionally, you could run srv.Shutdown in a goroutine and block on
 	// <-ctx.Done() if your application should wait for other services
 	// to finalize based on context cancellation.
-	log.Println("shutting down")
+	log.Println("Shutting down")
 	os.Exit(0)
 }
