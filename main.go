@@ -32,6 +32,8 @@ func init() {
 	} else {
 		log.SetFormatter(&log.JSONFormatter{})
 	}
+
+
 }
 
 func main() {

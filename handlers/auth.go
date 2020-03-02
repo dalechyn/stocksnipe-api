@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/go-playground/validator/v10"
+	"github.com/h0tw4t3r/stocksnipe_api/db"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"net/http"
 	"os"
 	"time"
@@ -15,70 +18,70 @@ import (
 const ExpiryTime = time.Hour * 24
 
 var validate *validator.Validate
-
-func passwordValidation(fl validator.FieldLevel) bool {
-	pass := fl.Field().String()
-
-	hasLowerCase := false
-	hasUpperCase := false
-	hasDigit := false
-	for _, c := range pass {
-		if c >= 'a' && c <= 'z' {
-			hasLowerCase = true
-		} else if c >= 'A' && c <= 'Z' {
-			hasUpperCase = true
-		} else if c >= '0' && c <= '9' {
-			hasDigit = true
-		}
-	}
-
-	return hasUpperCase && hasLowerCase && hasDigit && len(pass) < 8 && len(pass) > 32
-}
-
+var userCollection *mongo.Collection
 
 func init() {
-	validate = validator.New()
-	if err := validate.RegisterValidation("password", passwordValidation); err != nil {
-		panic(err)
-	}
+	dbClient := db.MongoInit()
+	userCollection = dbClient.Database("StockSnipeAPI").Collection("users")
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
-	var registerRequestBody struct {
-		Email string `json:"email" validate:"required"`
-		Login string `json:"login" validate:"required"`
-		Password string `json:"password" validate:"min=8,max=32"`
-	}
+	log.Debug("Registration attempt")
+	inRequest := &registerRequest{}
 
-	err := json.NewDecoder(r.Body).Decode(&registerRequestBody)
+	err := json.NewDecoder(r.Body).Decode(inRequest)
 	if err != nil {
-		log.Errorln(err.Error())
+		log.Error(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	fmt.Println(registerRequestBody)
 
-	if errs := validate.Struct(registerRequestBody); errs != nil {
-		log.Errorln(errs)
+	if errs := validate.Struct(inRequest); errs != nil {
+		log.Error(errs)
 		http.Error(w, errs.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 
-	fmt.Println(registerRequestBody)
+	if err := userCollection.FindOne(
+		context.TODO(),
+		bson.M{"$or":
+			bson.A{
+				bson.M{"login": inRequest.Login},
+				bson.M{"email": inRequest.Email}}}).Err(); err == nil {
+		log.Error(err)
+		http.Error(w, "User with that login or email already exists", http.StatusConflict)
+		return
+	}
 
+	res, err := userCollection.InsertOne(context.TODO(), inRequest)
+
+	if err != nil {
+		log.Error(err)
+	}
+
+	log.WithField("ID", res.InsertedID).Debug("New document added")
+	w.WriteHeader(http.StatusOK)
 }
 
 // Login request structure
 func Login(w http.ResponseWriter, r *http.Request) {
-	var loginRequestBody struct {
-		Login string `json:"login"`
-		Password string `json:"password"`
-	}
+	log.Debug("Login attempt")
+	inRequest := &loginRequest{}
 
-	err := json.NewDecoder(r.Body).Decode(&loginRequestBody)
+	err := json.NewDecoder(r.Body).Decode(inRequest)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Check if user exists
+	lookedUpUser := &loginRequest{}
+	if err := userCollection.
+		FindOne(context.TODO(), bson.D{{"login", inRequest.Login}}).
+		Decode(&lookedUpUser); err != nil {
+			log.Error(err)
+			http.Error(w, "Wrong login or password provided", http.StatusUnauthorized)
+			return
 	}
 
 	// JWT creation
@@ -96,18 +99,12 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, _ := token.SignedString([]byte(secretKey))
 
-	w.Header().Set("Content-Type", "application/json")
-
-	res := struct {
-		Login string `json:"Login"`
-		JWT   string `json:"JWT"`
-	}{loginRequestBody.Login, tokenString}
-
-	resBytes, err := json.Marshal(res)
+	resBytes, err := json.Marshal(&loginResponse{inRequest.Login, tokenString})
 	if err != nil {
 		log.WithField("err", err).Error("JSON Marshal() error")
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(resBytes); err != nil {
 		log.Error(err)
 	}
