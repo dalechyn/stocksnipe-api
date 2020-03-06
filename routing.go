@@ -13,7 +13,7 @@ func Router() http.Handler  {
 	r := mux.NewRouter()
 	r.HandleFunc("/auth/login", handlers.Login)
 	r.HandleFunc("/auth/register", handlers.Register)
-	r.HandleFunc("/auth/refresh", handlers.Register)
+	r.HandleFunc("/auth/refresh", handlers.Token)
 
 	loggedHandler := LoggingHandler(log.New().Writer(), r)
 

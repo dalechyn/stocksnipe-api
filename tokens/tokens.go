@@ -19,15 +19,15 @@ import (
 )
 
 const (
-	accessTokenExpiry = 2 * time.Minute
+	accessTokenExpiry = 1 * time.Second
 	accessTokenType   = "access"
 
-	refreshTokenExpiry = 3 * time.Minute
+	refreshTokenExpiry = 3 * time.Hour
 	refreshTokenType   = "refresh"
 )
 
 type refreshTokenClaims struct {
-	UID                uuid.UUID
+	Id                 uuid.UUID
 	TokenType          string
 	jwt.StandardClaims
 }
@@ -48,7 +48,7 @@ func GetUserID(refreshToken string) (string, error) {
 	// Looking up for userID in database by decoded refresh token UID
 	accessToken := &models.TokenSchema{}
 	if err := tokenCollection.
-		FindOne(context.TODO(), bson.E{"tokenID", refreshTokenUID}).
+		FindOne(context.TODO(), bson.M{"tokenID": refreshTokenUID}).
 		Decode(accessToken); err != nil {
 		log.Error(err)
 		return "", err
@@ -87,13 +87,13 @@ func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
 		return nil, err
 	}
 
-	token, err := jwt.Parse(refreshToken, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(refreshToken, &refreshTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
 		// Checking encryption algorithm
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
-		return secretKey, nil
+		return []byte(secretKey), nil
 	})
 	if err != nil {
 		log.Error(err)
@@ -101,7 +101,7 @@ func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
 	}
 
 	// Pulling out userID stored in JWT
-	claims, ok := token.Claims.(refreshTokenClaims)
+	claims, ok := token.Claims.(*refreshTokenClaims)
 
 	// Checking if token is valid
 	if !ok || !token.Valid {
@@ -123,7 +123,7 @@ func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
 		return nil, err
 	}
 
-	return &claims.UID, nil
+	return &claims.Id, nil
 }
 
 // Generates Access token which has the userID inside
@@ -155,8 +155,8 @@ func generateRefreshToken() (*uuid.UUID, string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, struct {
-		id uuid.UUID
-		tokenType string
+		Id uuid.UUID
+		TokenType string
 		jwt.StandardClaims
 	}{
 		uid,
