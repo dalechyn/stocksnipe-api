@@ -14,6 +14,7 @@ func Router() http.Handler  {
 	r.HandleFunc("/auth/login", handlers.Login)
 	r.HandleFunc("/auth/register", handlers.Register)
 	r.HandleFunc("/auth/refresh", handlers.Token)
+	r.HandleFunc("/test401", handlers.Test401)
 
 	loggedHandler := LoggingHandler(log.New().Writer(), r)
 

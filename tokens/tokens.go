@@ -2,8 +2,12 @@ package tokens
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/square/go-jose"
 	"os"
 	"time"
 
@@ -19,12 +23,18 @@ import (
 )
 
 const (
-	accessTokenExpiry = 1 * time.Second
+	accessTokenExpiry = 3 * time.Minute
 	accessTokenType   = "access"
 
 	refreshTokenExpiry = 3 * time.Hour
 	refreshTokenType   = "refresh"
 )
+
+type accessTokenClaims struct {
+	userID string
+	tokenType string
+	jwt.StandardClaims
+}
 
 type refreshTokenClaims struct {
 	Id                 uuid.UUID
@@ -77,17 +87,59 @@ func UpdateTokens(userID string) (string, string, error) {
 	return accessToken, refreshToken, nil
 }
 
-// Validates refresh token by type, algorithm and expiry
-func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
-	// Pulling out secret key to validate and decode refresh JWT
+func getSecretKey() (string, error) {
 	secretKey, exists := os.LookupEnv("SECRET_KEY")
 	if !exists {
 		err := errors.New("secret key not found")
+		return "", err
+	}
+	return secretKey, nil
+}
+
+func ValidateAccessToken(accessToken string) error {
+	// Pulling out secret key to validate and decode access JWT
+	secretKey, err := getSecretKey()
+	if err != nil {
+		log.Error(err)
+		return err
+	}
+	token, err := jwt.ParseWithClaims(accessToken, &accessTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Checking encryption algorithm
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		return []byte(secretKey), nil
+	})
+
+	return nil
+}
+
+// Validates refresh token by type, algorithm and expiry
+func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
+	// Pulling out secret key to validate and decode refresh JWT
+	secretKey, err := getSecretKey()
+	if err != nil {
 		log.Error(err)
 		return nil, err
 	}
 
 	token, err := jwt.ParseWithClaims(refreshToken, &refreshTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Pulling out userID stored in JWT
+		claims, ok := token.Claims.(*refreshTokenClaims)
+		if !ok {
+			err := errors.New("refreshTokenClaims destruction failed")
+			log.Error(err)
+			return nil, err
+		}
+
+		// RefreshToken type must be a refresh token
+		if claims.TokenType != refreshTokenType {
+			err := errors.New("bad token type")
+			log.Error(err)
+			return nil, err
+		}
+
 		// Checking encryption algorithm
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -100,21 +152,13 @@ func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
 		return nil, err
 	}
 
-	// Pulling out userID stored in JWT
-	claims, ok := token.Claims.(*refreshTokenClaims)
-
 	// Checking if token is valid
-	if !ok || !token.Valid {
+	if !ok || !token.Valid || claims.Valid() {
 		log.Error(err)
 		return nil, err
 	}
 
-	// RefreshToken type must be a refresh token
-	if claims.TokenType != refreshTokenType {
-		err := errors.New("bad token type")
-		log.Error(err)
-		return nil, err
-	}
+
 
 	// Checking token expiry
 	if !claims.VerifyExpiresAt(time.Now().Unix(), false) {
@@ -128,19 +172,42 @@ func validateRefreshToken(refreshToken string) (*uuid.UUID, error) {
 
 // Generates Access token which has the userID inside
 func generateAccessToken(userID string) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, struct {
-		userID string
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Instantiate an encrypter using RSA-OAEP with AES128-GCM. An error would
+	// indicate that the selected algorithm(s) are not currently supported.
+	publicKey := &privateKey.PublicKey
+	encrypter, err := jose.NewEncrypter(jose.A128GCM, jose.Recipient{Algorithm: jose.RSA_OAEP, Key: publicKey}, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Preparing payload
+	payload, err := json.Marshal(struct {
+		usedID string
 		tokenType string
-		jwt.StandardClaims
-	}{
+	}{userID, accessTokenType})
+	object, err := encrypter.Encrypt(payload)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
+
+
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokenClaims{
 		userID,
 		accessTokenType,
 		jwt.StandardClaims{ExpiresAt: time.Now().Add(accessTokenExpiry).Unix()}})
 
-	secretKey, exists := os.LookupEnv("SECRET_KEY")
-	if !exists {
-		log.Error("Secret key not found")
-		return "", errors.New("secret key not found")
+	secretKey, err := getSecretKey()
+	if err != nil {
+		log.Error(err)
+		return "", err
 	}
 
 	return token.SignedString([]byte(secretKey))
@@ -154,19 +221,15 @@ func generateRefreshToken() (*uuid.UUID, string, error) {
 		return nil, "", err
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, struct {
-		Id uuid.UUID
-		TokenType string
-		jwt.StandardClaims
-	}{
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims{
 		uid,
 		refreshTokenType,
 		jwt.StandardClaims{ExpiresAt: time.Now().Add(refreshTokenExpiry).Unix()}})
 
-	secretKey, exists := os.LookupEnv("SECRET_KEY")
-	if !exists {
-		log.Error("Secret key not found")
-		return nil, "", errors.New("secret key not found")
+	secretKey, err := getSecretKey()
+	if err != nil {
+		log.Error(err)
+		return nil, "", err
 	}
 
 	res, err := token.SignedString([]byte(secretKey))

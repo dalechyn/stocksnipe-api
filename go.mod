@@ -10,5 +10,7 @@ require (
 	github.com/gorilla/mux v1.7.4
 	github.com/joho/godotenv v1.3.0
 	github.com/sirupsen/logrus v1.4.2
+	github.com/square/go-jose v2.4.1+incompatible
 	go.mongodb.org/mongo-driver v1.3.0
+	gopkg.in/square/go-jose.v2 v2.4.1 // indirect
 )
